@@ -4,13 +4,15 @@
 # UpdateChecker compares against the latest GitHub release tag. It MUST track the release tag: every
 # release bumps this and the git tag together (e.g. tag v1.9.1 <-> mod-version 1.9.1). The old "jar stays
 # at 1.0.0 while tags advance" convention is dropped — it made the UpdateChecker report a permanent false
-# "outdated" notice. 1.14.0 is a minor release: a new Nuker world module in the BossUtility half (a GPL-3.0
-# port of Meteor Client's Nuker) — shape/range block breaking with a whitelist/blacklist, sort modes, legit
-# or instant packet mining, and a render overlay. It ships inert (Whitelist + empty list) until you pick
-# blocks. Jar is bossaddon-<version>.jar. The local config FILE stays "boss-pvp.properties", and module ids
-# are scoped under the fabric mod id ("bossaddon:pvp:*" / "bossaddon:utility:*") — AUTISM 3.4 rejects any
-# addon module whose id does not start with the mod id.
-mod-version = "1.14.0"
+# "outdated" notice. 1.14.1 is a patch fixing the Nuker module from 1.14.0: legit progressive mining was
+# reset every tick by the delay gate (so any non-instant block never broke) and the per-tick loop burst-
+# started multiple blocks, canceling each other. Legit mining now runs continuously on one block until it
+# breaks; the delay/maxPerTick burst applies only to the instant packet/interact paths. Also: line-of-sight
+# now uses the block OUTLINE (so grass/plants are targetable), a Debug messages toggle reports the per-tick
+# filter breakdown, and an empty whitelist warns once instead of silently idling. Jar is bossaddon-<version>.jar.
+# The local config FILE stays "boss-pvp.properties", and module ids are scoped under the fabric mod id
+# ("bossaddon:pvp:*" / "bossaddon:utility:*") — AUTISM 3.4 rejects any module whose id doesn't start with it.
+mod-version = "1.14.1"
 
 minecraft = "26.2"
 fabric-loader = "0.19.3"
