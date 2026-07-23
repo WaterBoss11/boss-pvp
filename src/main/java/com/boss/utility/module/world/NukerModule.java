@@ -12,6 +12,7 @@ import autismclient.api.module.ColorSetting;
 import autismclient.api.module.DoubleSetting;
 import autismclient.api.module.IntSetting;
 import autismclient.api.module.RegistryListSetting;
+import autismclient.util.AutismClientMessaging;
 import autismclient.util.AutismRotationUtil;
 import autismclient.util.AutismWorldGeometry;
 
@@ -55,8 +56,16 @@ public final class NukerModule extends Module {
 
     private int delayTimer = 0;
     private BlockPos lastMiningPos = null;
+    private boolean warnedEmptyList = false;
+    private int debugCounter = 0;
     // Published each tick for the render thread (COLLECT_SUBMITS runs off the client thread).
     private volatile List<BlockPos> renderTargets = List.of();
+
+    // Filter breakdown from the last collect pass, reported by the debug setting so "nothing happens" is
+    // always explainable: every scanned block lands in exactly one of these buckets or becomes a target.
+    private static final class Stats {
+        int scanned, air, unbreakable, modeFiltered, listFiltered, toolFiltered, reachFiltered;
+    }
 
     public NukerModule() {
         super(BossUtilityAddon.ID + ":nuker", "Nuker", "Breaks nearby blocks within a shape.");
@@ -84,7 +93,11 @@ public final class NukerModule extends Module {
         add(new IntSetting("maxPerTick", "Max blocks per tick", 1, 1, 8, 1)
             .description("How many blocks to break each tick. Legit mining still finishes one block at a time; this mainly matters with instant packet mining.").visibleWhen(MenuMode::advanced).group("General"));
         add(new IntSetting("delay", "Delay (ticks)", 2, 0, 20, 1)
-            .formatter(v -> v + "t").visibleWhen(MenuMode::advanced).group("General"));
+            .formatter(v -> v + "t")
+            .description("Pause after a block finishes breaking (or between instant-mine bursts). Does not interrupt mining a block in progress.")
+            .visibleWhen(MenuMode::advanced).group("General"));
+        add(new BoolSetting("debug", "Debug messages", false)
+            .description("Chat a once-a-second breakdown of how many blocks were scanned and why they were skipped (list, mode, tool, line of sight). Turn this on if Nuker seems to do nothing.").group("General"));
         add(new DoubleSetting("wallsRange", "Through-wall range", 0.0, 0.0, 6.0, 0.5)
             .description("Break blocks you can't see within this distance (0 = only blocks in line of sight).").visibleWhen(MenuMode::advanced).group("General"));
         add(new BoolSetting("rotate", "Rotate to block", true)
@@ -124,6 +137,8 @@ public final class NukerModule extends Module {
     public void onDisable() {
         delayTimer = 0;
         lastMiningPos = null;
+        warnedEmptyList = false;
+        debugCounter = 0;
         renderTargets = List.of();
         Minecraft mc = Minecraft.getInstance();
         if (mc != null && mc.gameMode != null) mc.gameMode.stopDestroyBlock();
@@ -141,23 +156,65 @@ public final class NukerModule extends Module {
             acc.bossutility$setDestroyDelay(0);
         }
 
+        // The one configuration that is guaranteed to do nothing: Whitelist mode with an empty list. Say so
+        // once per enable instead of silently idling — "enabled it and nothing happened" was a bug report.
+        if (!warnedEmptyList && "Whitelist".equals(choice("listMode")) && blockIds(list("whitelist")).isEmpty()) {
+            warnedEmptyList = true;
+            AutismClientMessaging.sendPrefixed(
+                "§d[Nuker] §7Whitelist is empty — nothing will break. Add blocks to the whitelist or switch List mode to Blacklist.");
+        }
+
+        // Collect + publish render targets EVERY tick (the delay gate below only pauses actions, not the
+        // overlay or the debug readout — a stale overlay made the module look dead during waits).
+        Stats stats = new Stats();
+        List<BlockPos> targets = collectTargets(p, level, stats);
+        renderTargets = List.copyOf(targets);
+        reportDebug(stats, targets.size());
+
+        // A finished legit break (our block became air) is the moment the between-block delay starts.
+        if (lastMiningPos != null && level.getBlockState(lastMiningPos).isAir()) {
+            lastMiningPos = null;
+            delayTimer = integer("delay");
+        }
         if (delayTimer > 0) { delayTimer--; return; }
 
-        List<BlockPos> targets = collectTargets(p, level);
-        renderTargets = List.copyOf(targets);
-        if (targets.isEmpty()) { lastMiningPos = null; return; }
-
-        int max = integer("maxPerTick");
-        int done = 0;
-        for (BlockPos pos : targets) {
-            if (done >= max) break;
-            breakBlock(mc, p, level, pos);
-            done++;
+        if (targets.isEmpty()) {
+            if (lastMiningPos != null) { mc.gameMode.stopDestroyBlock(); lastMiningPos = null; }
+            return;
         }
-        if (done > 0) delayTimer = integer("delay");
+
+        if (bool("interact") || bool("packetMine")) {
+            // Instant paths: these complete in one action, so maxPerTick bursts + the delay gate apply.
+            int max = integer("maxPerTick");
+            int done = 0;
+            for (BlockPos pos : targets) {
+                if (done >= max) break;
+                breakInstant(mc, p, pos);
+                done++;
+            }
+            if (done > 0) delayTimer = integer("delay");
+            lastMiningPos = null;
+        } else {
+            // Legit path: progressive mining works ONLY with an uninterrupted continueDestroyBlock stream on
+            // ONE block — progress decays the moment you stop, and starting another block cancels the first.
+            // So: exactly one block, every tick, until it's gone (v1.14.0 gated this behind the delay timer
+            // and burst-started maxPerTick blocks per tick, which reset progress forever — the "Nuker does
+            // nothing" bug for any block that isn't instant-break).
+            mineLegit(mc, p, targets.get(0));
+        }
     }
 
-    private List<BlockPos> collectTargets(LocalPlayer p, Level level) {
+    // Once-a-second filter breakdown so a silent no-op is always explainable in chat.
+    private void reportDebug(Stats s, int targetCount) {
+        if (!bool("debug")) { debugCounter = 0; return; }
+        if (++debugCounter < 20) return;
+        debugCounter = 0;
+        AutismClientMessaging.sendPrefixed(String.format(
+            "§d[Nuker] §7targets %d §8| scanned %d, air %d, unbreakable %d, mode-skip %d, list-skip %d, tool-skip %d, sight-skip %d",
+            targetCount, s.scanned, s.air, s.unbreakable, s.modeFiltered, s.listFiltered, s.toolFiltered, s.reachFiltered));
+    }
+
+    private List<BlockPos> collectTargets(LocalPlayer p, Level level, Stats stats) {
         List<BlockPos> out = new ArrayList<>();
         boolean cube = "Cube".equals(choice("shape"));
         double range = decimal("range");
@@ -189,20 +246,21 @@ public final class NukerModule extends Module {
             for (int dz = -back; dz <= fwd; dz++) {
                 for (int dy = -down; dy <= up; dy++) {
                     if (!cube && !NukerShape.inSphere(dx, dy, dz, range)) continue;
+                    stats.scanned++;
                     BlockPos bp = center.offset(dx, dy, dz);
                     BlockState state = level.getBlockState(bp);
-                    if (state.isAir()) continue;
+                    if (state.isAir()) { stats.air++; continue; }
                     float hardness = state.getDestroySpeed(level, bp);
-                    if (hardness < 0.0f) continue;   // unbreakable (bedrock etc.)
-                    if (!NukerShape.flattenAllows(mode, bp.getY(), feetY)) continue;
+                    if (hardness < 0.0f) { stats.unbreakable++; continue; }   // bedrock etc.
+                    if (!NukerShape.flattenAllows(mode, bp.getY(), feetY)) { stats.modeFiltered++; continue; }
                     boolean inList = matchesBlock(state.getBlock(), listIds);
-                    if (!NukerShape.listAllows(listMode, inList)) continue;
-                    if (suitable && !p.getMainHandItem().isCorrectToolForDrops(state)) continue;
+                    if (!NukerShape.listAllows(listMode, inList)) { stats.listFiltered++; continue; }
+                    if (suitable && !p.getMainHandItem().isCorrectToolForDrops(state)) { stats.toolFiltered++; continue; }
 
                     Vec3 c = Vec3.atCenterOf(bp);
                     double distSq = eye.distanceToSqr(c);
-                    if (!cube && distSq > maxReachSq) continue;
-                    if (!inReach(level, p, eye, bp, c, range, wallsRange, distSq)) continue;
+                    if (!cube && distSq > maxReachSq) { stats.reachFiltered++; continue; }
+                    if (!inReach(level, p, eye, bp, c, range, wallsRange, distSq)) { stats.reachFiltered++; continue; }
 
                     out.add(bp.immutable());
                 }
@@ -226,21 +284,21 @@ public final class NukerModule extends Module {
         return wallsRange > 0.0 && distSq <= wallsRange * wallsRange;
     }
 
+    // OUTLINE (the shape vanilla block-picking uses), not COLLIDER: with COLLIDER a no-collision block
+    // (grass, flowers, snow layers) can never be "hit" by its own raycast, so it was permanently invisible
+    // and filtered out at the default wallsRange of 0.
     private boolean canSee(Level level, LocalPlayer p, Vec3 eye, BlockPos pos, Vec3 center) {
         HitResult hit = level.clip(new ClipContext(eye, center,
-            ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, p));
+            ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, p));
         if (hit == null || hit.getType() == HitResult.Type.MISS) return true;
         if (hit instanceof BlockHitResult bhr && bhr.getBlockPos().equals(pos)) return true;
         return hit.getLocation().distanceToSqr(center) < 0.1;
     }
 
-    private void breakBlock(Minecraft mc, LocalPlayer p, Level level, BlockPos pos) {
+    // One-action paths (interact / instant packet mine): complete immediately, safe to burst per tick.
+    private void breakInstant(Minecraft mc, LocalPlayer p, BlockPos pos) {
         Direction face = faceToward(p.getEyePosition(), pos);
-        if (bool("rotate")) {
-            Vec3 c = Vec3.atCenterOf(pos);
-            if (bool("silentRotation")) sendSilentLook(mc, p, c);
-            else Util.face(p, c);
-        }
+        rotateTo(mc, p, pos);
         boolean swing = bool("swing");
 
         if (bool("interact")) {
@@ -250,28 +308,35 @@ public final class NukerModule extends Module {
             return;
         }
 
-        if (bool("packetMine")) {
-            var conn = mc.getConnection();
-            if (conn != null) {
-                conn.send(new ServerboundPlayerActionPacket(
-                    ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, pos, face));
-                if (swing) p.swing(InteractionHand.MAIN_HAND);
-                conn.send(new ServerboundPlayerActionPacket(
-                    ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, pos, face));
-            }
-            lastMiningPos = null;
-            return;
+        var conn = mc.getConnection();
+        if (conn != null) {
+            conn.send(new ServerboundPlayerActionPacket(
+                ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, pos, face));
+            if (swing) p.swing(InteractionHand.MAIN_HAND);
+            conn.send(new ServerboundPlayerActionPacket(
+                ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, pos, face));
         }
+    }
 
-        // Legit progressive mining: start on a new block, continue the one we're already on (so hard blocks
-        // finish over several ticks instead of restarting each tick).
+    // Legit progressive mining: one block at a time, continueDestroyBlock EVERY tick until it breaks —
+    // progress decays if the stream stops, and starting a second block cancels the first.
+    private void mineLegit(Minecraft mc, LocalPlayer p, BlockPos pos) {
+        Direction face = faceToward(p.getEyePosition(), pos);
+        rotateTo(mc, p, pos);
         if (!pos.equals(lastMiningPos)) {
             mc.gameMode.startDestroyBlock(pos, face);
             lastMiningPos = pos.immutable();
         } else {
             mc.gameMode.continueDestroyBlock(pos, face);
         }
-        if (swing) p.swing(InteractionHand.MAIN_HAND);
+        if (bool("swing")) p.swing(InteractionHand.MAIN_HAND);
+    }
+
+    private void rotateTo(Minecraft mc, LocalPlayer p, BlockPos pos) {
+        if (!bool("rotate")) return;
+        Vec3 c = Vec3.atCenterOf(pos);
+        if (bool("silentRotation")) sendSilentLook(mc, p, c);
+        else Util.face(p, c);
     }
 
     private void sendSilentLook(Minecraft mc, LocalPlayer p, Vec3 point) {
