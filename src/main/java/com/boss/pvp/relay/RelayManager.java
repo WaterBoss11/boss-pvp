@@ -492,7 +492,10 @@ public final class RelayManager implements RelayClient.Handler {
                 pendingWarpFrom = from;
                 pendingWarpAddress = address.trim();
                 pendingWarpAt = System.currentTimeMillis();
-                display(BossChatFormat.warpRequest(from, fromVerified, pendingWarpAddress));
+                // Chips here matter most: this is the prompt whose answer command differs from the party
+                // one by a single word, which is exactly the mix-up that made warp look broken.
+                displayPrompt(BossChatFormat.warpRequest(from, fromVerified, pendingWarpAddress),
+                    ChatActions.WARP_ACCEPT, ChatActions.WARP_DECLINE);
             }
             case "declined" -> display(BossChatFormat.warpDeclinedBy(str(o, "from"), bool(o, "fromVerified", true)));
             default -> { /* unknown warp event — ignore */ }
@@ -714,7 +717,9 @@ public final class RelayManager implements RelayClient.Handler {
         String event = str(o, "event");
         if (event == null) return;
         switch (event) {
-            case "invite" -> display(BossChatFormat.partyInvite(str(o, "from"), bool(o, "fromVerified", true)));
+            case "invite" -> displayPrompt(
+                BossChatFormat.partyInvite(str(o, "from"), bool(o, "fromVerified", true)),
+                ChatActions.PARTY_ACCEPT, ChatActions.PARTY_DECLINE);
             case "joined" -> display(BossChatFormat.partyJoined(
                 str(o, "user"), bool(o, "verified", true), memberCount(o)));
             case "left"   -> display(BossChatFormat.partyLeft(
@@ -759,10 +764,23 @@ public final class RelayManager implements RelayClient.Handler {
     }
 
     private void display(String s) {
+        displayComponent(Component.literal(s), s);
+    }
+
+    /**
+     * A prompt with clickable answer chips (see {@link ChatActions}) — used for the two prompts that ask a
+     * question, so the answer doesn't depend on retyping a command exactly. {@code plain} is the fallback for
+     * the console, where a click event means nothing.
+     */
+    private void displayPrompt(String legacy, ChatActions.Action accept, ChatActions.Action decline) {
+        displayComponent(ChatActions.prompt(legacy, accept, decline), legacy);
+    }
+
+    private void displayComponent(Component component, String plain) {
         Minecraft mc = Minecraft.getInstance();
         mc.execute(() -> {
-            if (mc.player != null) mc.player.sendSystemMessage(Component.literal(s));
-            else System.out.println("[boss-pvp/relay] " + s);
+            if (mc.player != null) mc.player.sendSystemMessage(component);
+            else System.out.println("[boss-pvp/relay] " + plain);
         });
     }
 
