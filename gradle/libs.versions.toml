@@ -4,7 +4,13 @@
 # UpdateChecker compares against the latest GitHub release tag. It MUST track the release tag: every
 # release bumps this and the git tag together (e.g. tag v1.9.1 <-> mod-version 1.9.1). The old "jar stays
 # at 1.0.0 while tags advance" convention is dropped — it made the UpdateChecker report a permanent false
-# "outdated" notice. 1.14.3 is a patch fixing two more BossChat identity/connection faults. (1) Relay identity
+# "outdated" notice. 1.14.4 is a small patch for a BossChat dead end: a warp request and a party invite are
+# answered by DIFFERENT commands, and the relay holds no warp state at all (the pending warp lives only on the
+# receiving client), so answering a warp with "party accept" reaches the relay's party path and gets back "You
+# have no pending party invite" — a message about a different feature, which reads as party warp being broken.
+# "party accept"/"decline" now name the command that answers a pending warp. A hint, not a redirect: accepting
+# a warp moves you to another server, which is exactly what the warp design requires an explicit command for.
+# 1.14.3 was a patch fixing two BossChat identity/connection faults. (1) Relay identity
 # was captured once at auth time, so an AUTISM runtime account switch left the relay calling you by the old
 # account — and since it routes invites/DMs/warps BY USERNAME, an invite to another player could resolve to
 # your own connection ("You cannot invite yourself") while your old name stayed hostage ("username is already
@@ -15,7 +21,7 @@
 # look identical. Jar is bossaddon-<version>.jar.
 # The local config FILE stays "boss-pvp.properties", and module ids are scoped under the fabric mod id
 # ("bossaddon:pvp:*" / "bossaddon:utility:*") — AUTISM 3.4 rejects any module whose id doesn't start with it.
-mod-version = "1.14.3"
+mod-version = "1.14.4"
 
 minecraft = "26.2"
 fabric-loader = "0.19.3"
