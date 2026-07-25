@@ -152,4 +152,34 @@ class CommandInterceptTest {
         // A partial narrows to it.
         assertEquals(java.util.List.of("invite"), BossAddonInit.suggest("party inv"));
     }
+
+    // ---- party warp: every form must reach an executable node -------------------------------------------
+
+    @Test
+    void partyWarpFormsAreAllRecognized() {
+        // "warp" bare = propose to the whole party; "warp <user>" = propose to one member; accept/decline
+        // answer an incoming request. All four, in both the short and full prefix forms.
+        for (String tail : new String[]{"party warp", "party warp accept", "party warp decline", "party warp Steve"}) {
+            assertTrue(BossAddonInit.isRecognizedCommand(tail), "short form recognized: '" + tail + "'");
+            assertTrue(BossAddonInit.isRecognizedCommand("bossaddon " + tail), "full form recognized: '" + tail + "'");
+        }
+    }
+
+    @Test
+    void partyWarpSuggestsItsResponses() {
+        // "warp" is offered under party, and its only literal children are the two responses — a member
+        // name is a free-form argument, so it must not appear as a completion.
+        assertTrue(BossAddonInit.suggest("party ").contains("warp"), "party subs: " + BossAddonInit.suggest("party "));
+        assertEquals(java.util.List.of("accept", "decline"), BossAddonInit.suggest("party warp "));
+        assertEquals(BossAddonInit.suggest("party warp "), BossAddonInit.suggest("bossaddon party warp "));
+    }
+
+    @Test
+    void partyWarpLiteralsWinOverTheUserArgument() {
+        // Brigadier matches the accept/decline literals before the <user> argument, so "warp accept" can
+        // never be parsed as "propose a warp to a player named accept".
+        assertTrue(BossAddonInit.isRecognizedCommand("party warp accept"));
+        // And a trailing extra token is not a command at all (it would silently do the wrong thing).
+        assertFalse(BossAddonInit.isRecognizedCommand("party warp accept now"));
+    }
 }
