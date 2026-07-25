@@ -127,9 +127,94 @@ public final class RelayManager implements RelayClient.Handler {
         sched.schedule(this::connect, delay, TimeUnit.MILLISECONDS);
     }
 
+    // ---- cold start (host asleep) --------------------------------------------------------------------
+    //
+    // The relay's free-tier host spins the service down after 15 minutes without inbound HTTP traffic, so
+    // the first connection after a quiet spell fails with the edge proxy answering the WebSocket upgrade
+    // 5xx. That is a wake-up, not an outage, and it is worth handling explicitly: the old behaviour was a
+    // silent exponential backoff, so the user saw nothing for up to a minute and concluded BossChat was
+    // broken.
+    //
+    // While warming up we poll GET /health instead of retrying the WebSocket. On this host an inbound HTTP
+    // request is what resets the idle timer and triggers the spin-up in the first place (an established
+    // WebSocket does not count), so polling /health both detects readiness and causes it.
+
+    /**
+     * Estimate shown to the user. A RANGE because the two credible sources disagree and both are honest:
+     * the host documents "about one minute" for a spin-up, while this relay — a small Node service — has been
+     * observed back in ~12s (see the relay's README). Quoting one number would be misleading either way.
+     */
+    private static final int COLD_START_LOW_SECONDS = 15;
+    private static final int COLD_START_HIGH_SECONDS = 60;
+    /** How long to keep waiting before giving up and reverting to ordinary backoff. */
+    private static final long COLD_START_BUDGET_MS = 120_000L;
+    /** Gap between health checks — frequent enough to feel responsive, not enough to hammer the host. */
+    private static final long COLD_START_POLL_MS = 3_000L;
+    /** How often to print a progress line while waiting (every Nth poll). */
+    private static final int COLD_START_PROGRESS_EVERY = 3;
+
+    private volatile boolean warmingUp = false;
+
+    /** True while we are waiting for a spun-down relay to wake up (drives UI/status text). */
+    public boolean isWarmingUp() { return warmingUp; }
+
+    @Override public void onConnectFailed(Throwable cause) {
+        RelayFailure kind = RelayFailure.classify(cause);
+        authed = false;
+        if (kind.isWarmingUp() && !fatal && RelayConfig.isConfigured()) {
+            beginColdStartWait();
+            return;
+        }
+        status = kind == RelayFailure.OUTAGE ? "unreachable" : "connect error";
+        if (kind == RelayFailure.OUTAGE && !fatal) display(BossChatFormat.unreachable());
+        if (!fatal) scheduleReconnect();
+    }
+
+    /** Enter the warming-up state and start polling /health until the service answers (or the budget runs out). */
+    private synchronized void beginColdStartWait() {
+        if (warmingUp) return;   // already waiting; don't stack pollers
+        warmingUp = true;
+        status = "relay starting up";
+        display(BossChatFormat.coldStart(COLD_START_LOW_SECONDS, COLD_START_HIGH_SECONDS));
+        final String healthUrl = HealthProbe.healthUrlFor(RelayConfig.url());
+        final long startedAt = System.currentTimeMillis();
+        if (healthUrl == null) {
+            // No usable health URL (unexpected URL shape) — nothing to poll, so fall back to plain backoff.
+            warmingUp = false;
+            scheduleReconnect();
+            return;
+        }
+        pollHealth(healthUrl, startedAt, 1);
+    }
+
+    private void pollHealth(String healthUrl, long startedAt, int attempt) {
+        sched.schedule(() -> {
+            if (fatal || !RelayConfig.isConfigured()) { warmingUp = false; return; }
+            int elapsed = (int) ((System.currentTimeMillis() - startedAt) / 1000L);
+            if (HealthProbe.isUp(healthUrl, java.time.Duration.ofSeconds(5))) {
+                warmingUp = false;
+                display(BossChatFormat.coldStartReady(elapsed));
+                backoffAttempt.set(0);   // the wake-up is not a failure streak; reconnect immediately
+                connect();
+                return;
+            }
+            if (System.currentTimeMillis() - startedAt >= COLD_START_BUDGET_MS) {
+                warmingUp = false;
+                display(BossChatFormat.coldStartTimedOut(elapsed));
+                scheduleReconnect();
+                return;
+            }
+            if (attempt % COLD_START_PROGRESS_EVERY == 0) {
+                display(BossChatFormat.coldStartProgress(elapsed, attempt));
+            }
+            pollHealth(healthUrl, startedAt, attempt + 1);
+        }, COLD_START_POLL_MS, TimeUnit.MILLISECONDS);
+    }
+
     // ---- transport callbacks (off-thread) ------------------------------------------------------------
 
     @Override public void onOpen() {
+        warmingUp = false;   // a socket is up, whatever we thought the host was doing
         status = "authenticating";
     }
 

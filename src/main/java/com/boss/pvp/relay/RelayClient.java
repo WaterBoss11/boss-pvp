@@ -23,6 +23,16 @@ public final class RelayClient {
         void onOpen();
         void onMessage(String json);
         void onClosed(String reason);
+
+        /**
+         * A connection attempt failed before the socket ever opened, with the raw cause — which
+         * {@link RelayFailure} needs in order to tell a host that is merely waking up (5xx on the upgrade)
+         * from one that isn't there at all. Defaults to the lossy string path so an implementation that
+         * doesn't care is unaffected.
+         */
+        default void onConnectFailed(Throwable cause) {
+            onClosed("connect failed: " + (cause == null ? "unknown" : cause.getMessage()));
+        }
     }
 
     private static final HttpClient HTTP = HttpClient.newHttpClient();
@@ -42,20 +52,31 @@ public final class RelayClient {
         this.handler = handler;
     }
 
-    /** Open the connection. On failure the handler's {@code onClosed} fires so the manager can back off/retry. */
+    /**
+     * Open the connection. On failure the handler's {@code onConnectFailed} fires with the raw cause, so the
+     * manager can tell a waking-up host from an absent one before deciding how to retry.
+     */
     public void connect() {
         try {
             HTTP.newWebSocketBuilder()
                 .buildAsync(uri, new Listener())
                 .whenComplete((socket, err) -> {
                     if (err != null) {
-                        handler.onClosed("connect failed: " + err.getMessage());
+                        if (!closing) handler.onConnectFailed(err);
                     } else {
                         ws = socket;
+                        // Closed while the handshake was still in flight — don't leave the socket open.
+                        if (closing) {
+                            try {
+                                socket.sendClose(WebSocket.NORMAL_CLOSURE, "bye");
+                            } catch (Throwable ignored) {
+                                // best effort
+                            }
+                        }
                     }
                 });
         } catch (Throwable t) {
-            handler.onClosed("connect error: " + t);
+            if (!closing) handler.onConnectFailed(t);
         }
     }
 

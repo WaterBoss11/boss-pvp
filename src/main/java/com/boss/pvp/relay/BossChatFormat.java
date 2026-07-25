@@ -238,6 +238,48 @@ public final class BossChatFormat {
         return status(GREY, it(GREY) + "disconnected");
     }
 
+    // ---- cold start (the relay's host was asleep and is waking up) --------------------------------------
+    //
+    // This is a routine, self-healing state, not an error: the free-tier host spins the service down after
+    // 15 minutes without inbound HTTP, so the first connection after a quiet spell always pays for the
+    // wake-up. It gets its own message set so it never reads like an outage — the user is told what is
+    // happening, roughly how long it takes, and sees progress rather than silence.
+
+    /**
+     * First notice that the relay is spinning up, with the expected wait. The estimate is a RANGE on purpose:
+     * the host's own documentation says a spin-up "takes about one minute", while this relay is a small Node
+     * service that has been observed back in ~12s. A single number would be wrong in one direction or the other.
+     */
+    public static String coldStart(int lowSeconds, int highSeconds) {
+        return status(WARN, it(WARN) + "BossRelay is starting up " + it(DGREY) + MIDDOT + " "
+            + it(GREY) + "estimated " + it(WHITE) + "~" + lowSeconds + DASH + highSeconds + "s"
+            + it(GREY) + " (the server sleeps when idle)" + ELL);
+    }
+
+    /** Periodic progress while waiting, so the wait is never silent. */
+    public static String coldStartProgress(int elapsedSeconds, int attempt) {
+        return status(WARN, it(GREY) + "still starting " + it(DGREY) + MIDDOT + " " + it(WHITE)
+            + elapsedSeconds + "s" + it(GREY) + " elapsed, check " + it(WHITE) + attempt + it(GREY) + ELL);
+    }
+
+    /** The health endpoint answered — the service is up and we're reconnecting. */
+    public static String coldStartReady(int elapsedSeconds) {
+        return status(OK, it(OK) + "BossRelay is awake " + it(DGREY) + "(" + elapsedSeconds + "s)" + " "
+            + it(GREY) + MIDDOT + " connecting" + ELL);
+    }
+
+    /** Gave up waiting for the wake-up; falling back to ordinary retries. */
+    public static String coldStartTimedOut(int elapsedSeconds) {
+        return status(ERR, it(ERR) + "BossRelay didn't come up within " + it(WHITE) + elapsedSeconds + "s"
+            + " " + it(DGREY) + MIDDOT + " " + it(GREY) + "retrying in the background");
+    }
+
+    /** Nothing is answering at all — distinct from a spin-up, so it must not claim the server is "starting". */
+    public static String unreachable() {
+        return status(ERR, it(ERR) + "can't reach BossRelay " + it(DGREY) + MIDDOT + " "
+            + it(GREY) + "check your connection; retrying in the background");
+    }
+
     public static String rejected(String reason) {
         return status(ERR, it(ERR) + "rejected" + it(DGREY) + ": " + it(GREY) + (reason == null ? "unknown" : reason));
     }
