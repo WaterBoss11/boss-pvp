@@ -426,11 +426,27 @@ public final class RelayManager implements RelayClient.Handler {
         display(BossChatFormat.warpSent(toUser));
     }
 
+    /**
+     * True when a warp request is pending and still inside its TTL.
+     *
+     * <p>Used to spot the {@code party accept} / {@code party warp accept} mix-up: a warp is answered by a
+     * DIFFERENT command from a party invite, and the relay — which holds no warp state at all — replies to
+     * the wrong one with "You have no pending party invite", a message about a different feature entirely.
+     */
+    public boolean hasPendingWarp() {
+        return pendingWarpAddress != null && System.currentTimeMillis() - pendingWarpAt <= WARP_TTL_MS;
+    }
+
     /** Accept the pending warp request: connect to the destination the requester named. The ONLY connect path. */
     public void warpAccept() {
         String addr = pendingWarpAddress;
         long at = pendingWarpAt;
         clearPendingWarp();
+        // Local-console diagnostic: the pending warp lives ONLY on this client (the relay is a pure
+        // forwarder and stores nothing), so if an accept ever misses, this line is the whole story.
+        log("warp accept: pending=" + (addr != null)
+            + (addr == null ? "" : " address=" + addr + " ageMs=" + (System.currentTimeMillis() - at))
+            + " ttlMs=" + WARP_TTL_MS + " from=" + pendingWarpFrom);
         if (addr == null || System.currentTimeMillis() - at > WARP_TTL_MS) {
             display(BossChatFormat.warpNonePending());
             return;

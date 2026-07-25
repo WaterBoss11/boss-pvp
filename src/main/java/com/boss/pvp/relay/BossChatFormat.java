@@ -171,6 +171,20 @@ public final class BossChatFormat {
         return status(GREY, it(GREY) + "no warp request to respond to");
     }
 
+    /**
+     * Shown when {@code party accept}/{@code decline} is used while a WARP request is pending — the two are
+     * answered by different commands and are easy to confuse, especially seconds after a party invite was
+     * accepted with the shorter one. Deliberately a hint and not an auto-redirect: accepting a warp moves you
+     * to another server, and that is exactly the action the warp design requires an explicit, unambiguous
+     * command for.
+     */
+    public static String warpPendingHint(String action) {
+        String verb = "decline".equals(action) ? "decline" : "accept";
+        return status(WARN, it(GREY) + "you also have a " + it(WHITE) + "warp request" + it(GREY) + " pending "
+            + it(DGREY) + MIDDOT + " " + it(GREY) + "answer that one with "
+            + it(WHITE) + "?bossaddon party warp " + verb);
+    }
+
     /** You tried to propose a warp but aren't on a server you can send people to. */
     public static String warpNotOnServer() {
         return status(GREY, it(GREY) + "you're not on a server you can warp people to");

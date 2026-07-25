@@ -369,6 +369,13 @@ public final class BossAddonInit implements ClientModInitializer {
     private static int relayParty(String action) {
         if (relayGate()) return 1;
         RelayManager r = RelayManager.get();
+        // A pending WARP is answered by "party warp accept", not "party accept". Since the relay holds no
+        // warp state, answering the wrong one gets "You have no pending party invite" — a message about a
+        // different feature, which reads as the warp being broken. Point at the right command instead.
+        // Only a hint, never a redirect: accepting a warp moves you to another server, so it stays explicit.
+        if (("accept".equals(action) || "decline".equals(action)) && r.hasPendingWarp()) {
+            msg(com.boss.pvp.relay.BossChatFormat.warpPendingHint(action));
+        }
         switch (action) {
             case "accept" -> r.partyAccept();
             case "decline" -> r.partyDecline();

@@ -346,7 +346,20 @@ class BossChatFormatTest {
             BossChatFormat.warpNotOnServer(),
             BossChatFormat.warpConnecting("play.example.com:25565"),
             BossChatFormat.dmNoTarget(),
-            BossChatFormat.dmScopeSet("Steve"));
+            BossChatFormat.dmScopeSet("Steve"),
+            // Connection-state and identity messages must obey the same font rule as everything else.
+            BossChatFormat.disconnected(),
+            BossChatFormat.connectingUnverified(),
+            BossChatFormat.disabled(),
+            BossChatFormat.coldStart(15, 60),
+            BossChatFormat.coldStartProgress(21, 7),
+            BossChatFormat.coldStartReady(24),
+            BossChatFormat.coldStartTimedOut(120),
+            BossChatFormat.unreachable(),
+            BossChatFormat.identityChanged("SFBOSS"),
+            BossChatFormat.forcedOffline(),
+            BossChatFormat.warpPendingHint("accept"),
+            BossChatFormat.warpPendingHint("decline"));
         for (int i = 0; i < all.length(); i++) {
             char c = all.charAt(i);
             if (c > 0x7F && c != '§') { // '§' is the formatting marker; any OTHER non-ASCII must be proven
