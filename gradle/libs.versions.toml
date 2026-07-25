@@ -4,16 +4,18 @@
 # UpdateChecker compares against the latest GitHub release tag. It MUST track the release tag: every
 # release bumps this and the git tag together (e.g. tag v1.9.1 <-> mod-version 1.9.1). The old "jar stays
 # at 1.0.0 while tags advance" convention is dropped — it made the UpdateChecker report a permanent false
-# "outdated" notice. 1.14.2 is a patch fixing BossChat's reconnect handling: RelayManager.connect() built a
-# new socket without closing the old one, so every reconnect leaked a live connection. The relay resolves a
-# username to the FIRST matching connection, so an account holding several sockets could have party invites
-# and warp requests delivered to an abandoned one — online, addressed correctly, and seeing nothing. Closing
-# it also required RelayClient.close() to honour its own contract: `closing` was assigned but never read, so
-# a discarded socket still reported onClose/onText to the manager that had replaced it. Jar is
-# bossaddon-<version>.jar.
+# "outdated" notice. 1.14.3 is a patch fixing two more BossChat identity/connection faults. (1) Relay identity
+# was captured once at auth time, so an AUTISM runtime account switch left the relay calling you by the old
+# account — and since it routes invites/DMs/warps BY USERNAME, an invite to another player could resolve to
+# your own connection ("You cannot invite yourself") while your old name stayed hostage ("username is already
+# in use"). The tick hook now reconnects when the local account changes. (2) A spun-down relay host produced a
+# silent backoff, so the user saw nothing for up to a minute; cold start is now told apart from an outage at
+# the socket level (5xx on the upgrade vs no HTTP at all) and reported with a ~15-60s estimate while /health is
+# polled. Also logs WHY auth went unverified, since relay.offline=true and a failed Mojang handshake used to
+# look identical. Jar is bossaddon-<version>.jar.
 # The local config FILE stays "boss-pvp.properties", and module ids are scoped under the fabric mod id
 # ("bossaddon:pvp:*" / "bossaddon:utility:*") — AUTISM 3.4 rejects any module whose id doesn't start with it.
-mod-version = "1.14.2"
+mod-version = "1.14.3"
 
 minecraft = "26.2"
 fabric-loader = "0.19.3"
