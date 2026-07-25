@@ -262,8 +262,24 @@ public final class RelayManager implements RelayClient.Handler {
                 // authenticate as a verified (premium) account. If it fails — offline/non-premium account, or a
                 // transient Mojang error — fall back to an unverified (self-reported) identity, but ONLY if the
                 // relay allows it. This never silently "downgrades" a premium user on a verified-only relay.
-                boolean joined = !RelayConfig.forceOffline()
-                    && MojangAuth.joinServer(token, uuid, serverId);
+                // Remember exactly who we are authenticating as, so a later account switch is detectable
+                // (see checkIdentityDrift) rather than silently leaving the relay with a stale identity.
+                authedIdentity = name + "/" + uuid;
+
+                boolean forced = RelayConfig.forceOffline();
+                boolean joined = !forced && MojangAuth.joinServer(token, uuid, serverId);
+
+                // Say WHY we are unverified. Previously both "you configured relay.offline" and "the Mojang
+                // handshake failed" produced an identical "(unverified)" line, which is indistinguishable
+                // from a bug in the relay's verification — and cost real time to diagnose.
+                if (forced) {
+                    log("verified auth SKIPPED: relay.offline=true forces the unverified path for " + name);
+                } else if (!joined) {
+                    log("Mojang join FAILED for " + name + " (token expired, offline account, or network) "
+                        + "— falling back to the unverified path");
+                } else {
+                    log("Mojang join ok for " + name + " — authenticating as verified");
+                }
 
                 RelayClient c = client;
                 if (c == null) return;
@@ -277,6 +293,7 @@ public final class RelayManager implements RelayClient.Handler {
                     auth.addProperty("server", currentServerId());
                     c.send(auth.toString());
                 } else if (allowUnverified) {
+                    if (forced) display(BossChatFormat.forcedOffline());
                     JsonObject auth = new JsonObject();
                     auth.addProperty("t", "auth");
                     auth.addProperty("offline", true);
@@ -521,9 +538,64 @@ public final class RelayManager implements RelayClient.Handler {
         }
     }
 
-    /** Per-tick hook (from the addon's onTick): keeps the relay's notion of your current server current. */
+    /**
+     * Per-tick hook (from the addon's onTick): keeps the relay's notion of your current server current, and
+     * catches the local account changing underneath an established connection.
+     */
     public void tick(Minecraft mc) {
-        if (authed) reportServer(false);
+        if (!authed) return;
+        reportServer(false);
+        checkIdentityDrift(mc);
+    }
+
+    // ---- identity drift (the account changed after we authenticated) ---------------------------------
+
+    /** The identity we actually authenticated as, so a mid-session account switch is detectable. */
+    private volatile String authedIdentity = null;
+
+    /** The username the relay knows us by (null until authenticated). Shown in the status report. */
+    public String authedName() {
+        String id = authedIdentity;
+        if (id == null) return null;
+        int slash = id.indexOf('/');
+        return slash < 0 ? id : id.substring(0, slash);
+    }
+
+    /** Local identity as a comparable string, or null when there is no user (never throws). */
+    private static String identityOf(Minecraft mc) {
+        try {
+            User u = mc == null ? null : mc.getUser();
+            if (u == null) return null;
+            String name = u.getName();
+            String uuid = u.getProfileId() == null ? "" : u.getProfileId().toString();
+            return name == null ? null : name + "/" + uuid;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * Re-authenticate if the local Minecraft account has changed since we connected.
+     *
+     * <p>Identity is captured once, at auth time. AUTISM Client can switch the account at runtime, and
+     * nothing here noticed — so the relay kept calling you by the account you held when the socket opened
+     * while the game called you the new one. That divergence is not cosmetic: the relay routes party
+     * invites, DMs and warps BY USERNAME, so a stale identity means invites addressed to your real current
+     * name land on someone else's connection (or, if the name the relay has for you is the one you type,
+     * your own — which reads as the nonsensical "You cannot invite yourself" for an invite to another
+     * player). It also holds your old name hostage: another client trying to authenticate as it is refused
+     * with "username is already in use".
+     *
+     * <p>Reconnecting is the whole fix, because {@code onHello} reads the user fresh on every connect.
+     */
+    private void checkIdentityDrift(Minecraft mc) {
+        String want = identityOf(mc);
+        String have = authedIdentity;
+        if (want == null || have == null || want.equals(have)) return;
+        authedIdentity = null;   // don't re-fire while the reconnect is in flight
+        String newName = want.substring(0, Math.max(want.indexOf('/'), 0));
+        display(BossChatFormat.identityChanged(newName.isEmpty() ? want : newName));
+        connect();
     }
 
     // ---- UI state ------------------------------------------------------------------------------------
@@ -663,6 +735,11 @@ public final class RelayManager implements RelayClient.Handler {
     private static int memberCount(JsonObject o) {
         JsonArray a = membersArray(o);
         return a == null ? 0 : a.size();
+    }
+
+    /** Console-only diagnostic (never chat) — for facts an operator needs from a log, not the player. */
+    private static void log(String s) {
+        System.out.println("[boss-pvp/relay] " + s);
     }
 
     private void display(String s) {

@@ -274,6 +274,27 @@ public final class BossChatFormat {
             + " " + it(DGREY) + MIDDOT + " " + it(GREY) + "retrying in the background");
     }
 
+    /**
+     * The local Minecraft account changed under an established connection, so we are re-authenticating as
+     * the new one. Named explicitly because the relay routes party invites and DMs BY USERNAME — being
+     * connected under a stale account is what makes an invite to another player answer "you cannot invite
+     * yourself", so the user needs to see that it has been corrected.
+     */
+    public static String identityChanged(String newName) {
+        return status(WARN, it(GREY) + "account changed to " + it(WHITE) + (newName == null ? "?" : newName)
+            + " " + it(DGREY) + MIDDOT + " " + it(GREY) + "reconnecting so BossChat knows the right name" + ELL);
+    }
+
+    /**
+     * Shown when {@code relay.offline=true} makes us skip Mojang deliberately. Without this the line is
+     * identical to a genuine auth failure, which is indistinguishable from a relay-side verification bug.
+     */
+    public static String forcedOffline() {
+        return status(WARN, it(GREY) + "unverified by " + it(WHITE) + "your own config " + it(DGREY) + MIDDOT
+            + " " + it(GREY) + "set " + it(WHITE) + "relay.offline=false" + it(GREY)
+            + " in boss-pvp.properties to connect as verified");
+    }
+
     /** Nothing is answering at all — distinct from a spin-up, so it must not claim the server is "starting". */
     public static String unreachable() {
         return status(ERR, it(ERR) + "can't reach BossRelay " + it(DGREY) + MIDDOT + " "
