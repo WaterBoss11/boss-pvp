@@ -4,15 +4,16 @@
 # UpdateChecker compares against the latest GitHub release tag. It MUST track the release tag: every
 # release bumps this and the git tag together (e.g. tag v1.9.1 <-> mod-version 1.9.1). The old "jar stays
 # at 1.0.0 while tags advance" convention is dropped — it made the UpdateChecker report a permanent false
-# "outdated" notice. 1.14.1 is a patch fixing the Nuker module from 1.14.0: legit progressive mining was
-# reset every tick by the delay gate (so any non-instant block never broke) and the per-tick loop burst-
-# started multiple blocks, canceling each other. Legit mining now runs continuously on one block until it
-# breaks; the delay/maxPerTick burst applies only to the instant packet/interact paths. Also: line-of-sight
-# now uses the block OUTLINE (so grass/plants are targetable), a Debug messages toggle reports the per-tick
-# filter breakdown, and an empty whitelist warns once instead of silently idling. Jar is bossaddon-<version>.jar.
+# "outdated" notice. 1.14.2 is a patch fixing BossChat's reconnect handling: RelayManager.connect() built a
+# new socket without closing the old one, so every reconnect leaked a live connection. The relay resolves a
+# username to the FIRST matching connection, so an account holding several sockets could have party invites
+# and warp requests delivered to an abandoned one — online, addressed correctly, and seeing nothing. Closing
+# it also required RelayClient.close() to honour its own contract: `closing` was assigned but never read, so
+# a discarded socket still reported onClose/onText to the manager that had replaced it. Jar is
+# bossaddon-<version>.jar.
 # The local config FILE stays "boss-pvp.properties", and module ids are scoped under the fabric mod id
 # ("bossaddon:pvp:*" / "bossaddon:utility:*") — AUTISM 3.4 rejects any module whose id doesn't start with it.
-mod-version = "1.14.1"
+mod-version = "1.14.2"
 
 minecraft = "26.2"
 fabric-loader = "0.19.3"
