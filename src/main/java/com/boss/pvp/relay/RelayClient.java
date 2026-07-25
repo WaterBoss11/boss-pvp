@@ -70,7 +70,16 @@ public final class RelayClient {
         }
     }
 
-    /** Close intentionally — suppresses the manager's auto-reconnect (set your own flag before calling). */
+    /**
+     * Close intentionally and DETACH: once this is called the socket stops reporting anything to the
+     * handler, so a deliberately-discarded connection can never drive the manager's state.
+     *
+     * <p>That detachment is the point. The manager replaces its client on every (re)connect, and the old
+     * socket's close lands asynchronously afterwards — so without this its {@code onClosed} would fire
+     * against the manager that has already moved on, scheduling a spurious reconnect and stomping the
+     * {@code authed}/{@code status} of the connection that replaced it. A stale {@code authok} arriving
+     * on the dead socket would be just as wrong, which is why {@code onText} is gated too.
+     */
     public void close() {
         closing = true;
         WebSocket w = ws;
@@ -86,10 +95,12 @@ public final class RelayClient {
     private final class Listener implements WebSocket.Listener {
         @Override public void onOpen(WebSocket webSocket) {
             webSocket.request(1);
+            if (closing) return;
             handler.onOpen();
         }
 
         @Override public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
+            if (closing) return null;   // frames from a discarded socket are not this manager's business
             buf.append(data);
             if (last) {
                 String msg = buf.toString();
@@ -105,11 +116,13 @@ public final class RelayClient {
         }
 
         @Override public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
+            if (closing) return null;   // we asked for this close; the manager already knows
             handler.onClosed("closed " + statusCode + (reason == null || reason.isBlank() ? "" : " " + reason));
             return null;
         }
 
         @Override public void onError(WebSocket webSocket, Throwable error) {
+            if (closing) return;
             handler.onClosed("error: " + error.getMessage());
         }
     }

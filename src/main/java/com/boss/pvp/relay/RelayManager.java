@@ -81,9 +81,19 @@ public final class RelayManager implements RelayClient.Handler {
         connect();
     }
 
-    /** (Re)connect from scratch. Safe to call repeatedly. */
+    /**
+     * (Re)connect from scratch. Safe to call repeatedly.
+     *
+     * <p>The previous socket is closed FIRST. Without that, every reconnect leaked a live connection: the
+     * relay would see one account holding several sockets, and since it resolves a username to the first
+     * matching connection, party invites and warps could be delivered to an abandoned one — the user is
+     * online, addressed correctly, and sees nothing. {@link RelayClient#close()} also detaches the old
+     * socket's callbacks, so its asynchronous close can't reconnect us again or overwrite the new
+     * connection's state.
+     */
     public synchronized void connect() {
         if (!RelayConfig.isConfigured()) return;
+        closeQuietly();   // never leave a previous socket open — one account, one connection
         fatal = false;
         authed = false;
         status = "connecting";
